@@ -32,6 +32,7 @@ const icons = {
 
 // --- Initialization ---
 document.addEventListener('DOMContentLoaded', () => {
+    console.log("GeoClock App Loading...");
     restoreSession();
     render();
 
@@ -44,15 +45,25 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 });
 
+
 function restoreSession() {
-    const token = localStorage.getItem('gc_token');
-    const user = localStorage.getItem('gc_user');
-    if (token && user) {
-        state.token = token;
-        state.user = JSON.parse(user);
-        fetchDashboardData();
+    try {
+        const token = localStorage.getItem('gc_token');
+        const user = localStorage.getItem('gc_user');
+        if (token && user && user !== 'undefined') {
+            const parsedUser = JSON.parse(user);
+            if (parsedUser && parsedUser.id) {
+                state.token = token;
+                state.user = parsedUser;
+                fetchDashboardData();
+            }
+        }
+    } catch (e) {
+        console.error("Session restore failed:", e);
+        logout();
     }
 }
+
 
 // --- API Wrapper ---
 async function apiFetch(url, options = {}) {
@@ -61,32 +72,50 @@ async function apiFetch(url, options = {}) {
 
     try {
         const res = await fetch(url, { ...options, headers });
-        if (res.status === 401) logout();
+        if (res.status === 401 && !url.includes('/api/auth/login')) {
+            logout();
+        }
         return res;
     } catch (e) {
-        return { ok: false, json: async () => ({ error: "Errore di connessione" }) };
+        console.error("Fetch error:", e);
+        return { ok: false, status: 500, json: async () => ({ error: "Errore di connessione" }) };
     }
+
 }
 
 // --- Auth Actions ---
 async function login(email, password) {
-    const res = await apiFetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password })
-    });
-    const data = await res.json();
-    if (res.ok) {
-        state.token = data.token;
-        state.user = data.user;
-        localStorage.setItem('gc_token', data.token);
-        localStorage.setItem('gc_user', JSON.stringify(data.user));
-        fetchDashboardData();
-        render();
-    } else {
-        alert(data.error || "Errore login");
+    try {
+        const res = await apiFetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, password })
+        });
+
+        let data;
+        try {
+            data = await res.json();
+        } catch (je) {
+            console.error("Non-JSON response:", je);
+            throw new Error("Il server ha risposto con un errore (non JSON)");
+        }
+
+        if (res.ok) {
+            state.token = data.token;
+            state.user = data.user;
+            localStorage.setItem('gc_token', data.token);
+            localStorage.setItem('gc_user', JSON.stringify(data.user));
+            fetchDashboardData();
+            render();
+        } else {
+            alert(data.error || "Credenziali non valide");
+        }
+    } catch (e) {
+        console.error("Login failed:", e);
+        alert(e.message || "Errore durante il login. Verifica la connessione al server.");
     }
 }
+
 
 function logout() {
     state.user = null;
@@ -102,24 +131,25 @@ async function fetchDashboardData() {
 
     if (state.user.role === 'admin') {
         const [rec, users, loc, hol] = await Promise.all([
-            apiFetch('/api/admin/records').then(r => r.json()),
-            apiFetch('/api/admin/users').then(r => r.json()),
-            apiFetch('/api/admin/locations').then(r => r.json()),
-            apiFetch('/api/admin/holidays').then(r => r.json())
+            apiFetch('/api/admin/records').then(r => r.ok ? r.json() : []),
+            apiFetch('/api/admin/users').then(r => r.ok ? r.json() : []),
+            apiFetch('/api/admin/locations').then(r => r.ok ? r.json() : []),
+            apiFetch('/api/admin/holidays').then(r => r.ok ? r.json() : [])
         ]);
-        state.records = rec;
-        state.users = users;
-        state.locations = loc;
-        state.adminHolidays = hol;
+        state.records = Array.isArray(rec) ? rec : [];
+        state.users = Array.isArray(users) ? users : [];
+        state.locations = Array.isArray(loc) ? loc : [];
+        state.adminHolidays = Array.isArray(hol) ? hol : [];
     } else {
         const [rec, hol] = await Promise.all([
-            apiFetch('/api/history').then(r => r.json()),
-            apiFetch('/api/holidays').then(r => r.json())
+            apiFetch('/api/history').then(r => r.ok ? r.json() : []),
+            apiFetch('/api/holidays').then(r => r.ok ? r.json() : [])
         ]);
-        state.records = rec;
-        state.holidays = hol;
-        state.activeSession = rec.find(r => !r.out_time) || null;
+        state.records = Array.isArray(rec) ? rec : [];
+        state.holidays = Array.isArray(hol) ? hol : [];
+        state.activeSession = state.records.find(r => !r.out_time) || null;
     }
+
     render();
 }
 
