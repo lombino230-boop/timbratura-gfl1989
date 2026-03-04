@@ -77,6 +77,113 @@ const useAuth = () => {
 
 // --- Components ---
 
+// --- Mock Data for Static Hosting ---
+const MOCK_USERS = [
+  { id: 1, name: 'Mario Rossi', email: 'mario@geoclock.it', role: 'employee' as const },
+  { id: 2, name: 'Admin', email: 'admin@geoclock.it', role: 'admin' as const }
+];
+
+const getMockData = <T,>(key: string, initial: T): T => {
+  const saved = localStorage.getItem(`mock_${key}`);
+  return saved ? JSON.parse(saved) : initial;
+};
+
+const saveMockData = (key: string, data: any) => {
+  localStorage.setItem(`mock_${key}`, JSON.stringify(data));
+};
+
+// --- API Wrapper with Mock Fallback ---
+const apiFetch = async (url: string, options: any = {}) => {
+  try {
+    const res = await fetch(url, options);
+    if (res.ok || res.status < 500) return res;
+    throw new Error('Server error');
+  } catch (err) {
+    console.warn(`API ${url} failed, falling back to mock mode`, err);
+    
+    // Mock Login
+    if (url === '/api/auth/login' && options.method === 'POST') {
+      const { email, password } = JSON.parse(options.body);
+      const user = MOCK_USERS.find(u => u.email === email);
+      if (user && (password === 'user123' || password === 'admin123')) {
+        return {
+          ok: true,
+          json: async () => ({ token: 'mock-token', user })
+        };
+      }
+      return { ok: false, json: async () => ({ error: 'Credenziali non valide (Mock Mode)' }) };
+    }
+
+    // Mock Records
+    if (url.startsWith('/api/records') || url.startsWith('/api/admin/records') || url.startsWith('/api/history')) {
+      const records = getMockData<Record[]>('records', []);
+      if (options.method === 'POST') {
+        const body = JSON.parse(options.body);
+        const newRecord = { ...body, id: Date.now(), out_time: null, out_lat: null, out_lon: null, in_time: new Date().toISOString() };
+        const updated = [newRecord, ...records];
+        saveMockData('records', updated);
+        return { ok: true, json: async () => ({ success: true, message: 'Timbratura effettuata (Mock Mode)' }) };
+      }
+      if (options.method === 'PUT') {
+        const body = JSON.parse(options.body);
+        const updated = records.map(r => r.id === body.id ? { ...r, ...body, out_time: new Date().toISOString() } : r);
+        saveMockData('records', updated);
+        return { ok: true, json: async () => ({ success: true, message: 'Uscita registrata (Mock Mode)' }) };
+      }
+      return { ok: true, json: async () => records };
+    }
+
+    // Mock Clock-in/out
+    if (url.startsWith('/api/clock-')) {
+      const type = url.includes('in') ? 'in' : 'out';
+      const records = getMockData<Record[]>('records', []);
+      if (type === 'in') {
+        const body = JSON.parse(options.body);
+        const newRecord = { 
+          id: Date.now(), 
+          user_id: 1, 
+          user_name: 'Mario Rossi',
+          in_time: new Date().toISOString(), 
+          in_lat: body.lat, 
+          in_lon: body.lon,
+          out_time: null, 
+          out_lat: null, 
+          out_lon: null,
+          location_name: 'Sede Centrale (Mock)'
+        };
+        saveMockData('records', [newRecord, ...records]);
+        return { ok: true, json: async () => ({ message: 'Entrata registrata (Mock Mode)' }) };
+      } else {
+        const body = JSON.parse(options.body);
+        const updated = records.map(r => !r.out_time ? { ...r, out_time: new Date().toISOString(), out_lat: body.lat, out_lon: body.lon } : r);
+        saveMockData('records', updated);
+        return { ok: true, json: async () => ({ message: 'Uscita registrata (Mock Mode)' }) };
+      }
+    }
+
+    // Mock Users
+    if (url === '/api/admin/users') {
+      return { ok: true, json: async () => MOCK_USERS };
+    }
+
+    // Mock Locations
+    if (url === '/api/locations' || url === '/api/admin/locations') {
+      const locations = getMockData<Location[]>('locations', [
+        { id: 1, name: 'Sede Centrale', lat: 45.4642, lon: 9.1900, radius_meters: 100 }
+      ]);
+      if (options.method === 'POST') {
+        const body = JSON.parse(options.body);
+        const updated = [...locations, { ...body, id: Date.now() }];
+        saveMockData('locations', updated);
+        return { ok: true, json: async () => ({ success: true }) };
+      }
+      return { ok: true, json: async () => locations };
+    }
+
+    throw err;
+  }
+};
+
 const Login = () => {
   const { login } = useAuth();
   const [email, setEmail] = useState('mario@geoclock.it');
@@ -89,7 +196,7 @@ const Login = () => {
     setLoading(true);
     setError('');
     try {
-      const res = await fetch('/api/auth/login', {
+      const res = await apiFetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password })
@@ -183,7 +290,7 @@ const EmployeeDashboard = () => {
   const [activeSession, setActiveSession] = useState<Record | null>(null);
 
   const fetchHistory = async () => {
-    const res = await fetch('/api/history', {
+    const res = await apiFetch('/api/history', {
       headers: { 'Authorization': `Bearer ${token}` }
     });
     const data = await res.json();
@@ -225,7 +332,7 @@ const EmployeeDashboard = () => {
 
   const performClock = async (type: 'in' | 'out', c: {lat: number, lon: number}) => {
     try {
-      const res = await fetch(`/api/clock-${type}`, {
+      const res = await apiFetch(`/api/clock-${type}`, {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
@@ -370,17 +477,15 @@ const AdminDashboard = () => {
   const fetchData = async () => {
     try {
       const [recRes, userRes, locRes] = await Promise.all([
-        fetch('/api/admin/records', { headers: { 'Authorization': `Bearer ${token}` } }),
-        fetch('/api/admin/users', { headers: { 'Authorization': `Bearer ${token}` } }),
-        fetch('/api/admin/locations', { headers: { 'Authorization': `Bearer ${token}` } })
+        apiFetch('/api/admin/records', { headers: { 'Authorization': `Bearer ${token}` } }),
+        apiFetch('/api/admin/users', { headers: { 'Authorization': `Bearer ${token}` } }),
+        apiFetch('/api/admin/locations', { headers: { 'Authorization': `Bearer ${token}` } })
       ]);
       
       if (recRes.ok && userRes.ok && locRes.ok) {
         setRecords(await recRes.json());
         setUsers(await userRes.json());
         setLocations(await locRes.json());
-      } else {
-        console.error("Failed to fetch admin data");
       }
     } catch (error) {
       console.error("Error fetching admin data:", error);
@@ -540,7 +645,7 @@ const AdminDashboard = () => {
                   e.preventDefault();
                   const formData = new FormData(e.currentTarget);
                   const data = Object.fromEntries(formData);
-                  const res = await fetch('/api/admin/users', {
+                  const res = await apiFetch('/api/admin/users', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
                     body: JSON.stringify(data)
@@ -588,7 +693,7 @@ const AdminDashboard = () => {
                   e.preventDefault();
                   const formData = new FormData(e.currentTarget);
                   const data = Object.fromEntries(formData);
-                  const res = await fetch('/api/admin/locations', {
+                  const res = await apiFetch('/api/admin/locations', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
                     body: JSON.stringify({

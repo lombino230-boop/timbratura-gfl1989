@@ -252,7 +252,8 @@ app.get("/api/download-project", (req, res) => {
       "README.md",
       "index.html",
       ".env.example",
-      "metadata.json"
+      "metadata.json",
+      "dist"
     ];
 
     filesToInclude.forEach(file => {

@@ -41,23 +41,18 @@ GeoClock è un'applicazione full-stack per la gestione delle presenze dei dipend
 - **Amministratore**: `admin@geoclock.it` / `admin123`
 - **Dipendente**: `mario@geoclock.it` / `user123`
 
-## Pubblicazione su GitHub
+## Pubblicazione su GitHub (Static Hosting)
 
-Per pubblicare questo progetto su GitHub:
+Il progetto è stato ottimizzato per funzionare anche come sito statico (senza server) grazie alla **Mock Mode**. Se carichi la cartella `dist` su GitHub Pages o simili:
 
-1. Crea un nuovo repository vuoto su GitHub.
-2. Inizializza git localmente (se non già fatto):
-   ```bash
-   git init
-   git add .
-   git commit -m "Initial commit"
-   ```
-3. Collega il repository remoto e carica i file:
-   ```bash
-   git remote add origin https://github.com/tuo-username/geoclock.git
-   git branch -M main
-   git push -u origin main
-   ```
+- L'app rileverà l'assenza del server e userà dati simulati.
+- I dati (timbrature, sedi) verranno salvati localmente nel browser (`localStorage`).
+- Puoi testare tutte le funzionalità (Login, Timbratura, Admin) usando le credenziali demo.
+
+### Passi per GitHub Pages:
+1. Carica il codice su GitHub.
+2. Abilita GitHub Pages puntando alla cartella `dist` (o usa una GitHub Action per il build).
+3. Assicurati che il file `vite.config.ts` abbia `base: './'` (già configurato).
 
 ## Licenza
 
