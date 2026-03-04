@@ -1,0 +1,5 @@
+{
+  "name": "GeoClock - Timbratura GPS",
+  "description": "Piattaforma completa per la timbratura digitale dei dipendenti con geolocalizzazione GPS e dashboard amministrativa.",
+  "requestFramePermissions": ["geolocation"]
+}

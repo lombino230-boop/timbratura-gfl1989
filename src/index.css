@@ -1,0 +1,17 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  background-color: #f8fafc;
+}
+
+.leaflet-container {
+  width: 100%;
+  height: 400px;
+  border-radius: 0.75rem;
+}
