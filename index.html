@@ -1,22 +1,30 @@
 <!doctype html>
-<html lang="en">
+<html lang="it">
 
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>My Google AI Studio App</title>
+  <title>GeoClock - Digital Time Tracking</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap" rel="stylesheet">
 </head>
 
 <body>
   <div id="root">
+    <!-- Initial Loading State -->
     <div
-      style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; font-family: sans-serif; color: #64748b;">
+      style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; font-family: 'Inter', sans-serif; color: #64748b;">
       <div
-        style="width: 40px; height: 40px; border: 3px solid #e2e8f0; border-top-color: #3b82f6; border-radius: 50%; animation: spin 1s linear infinite;">
+        style="width: 40px; height: 40px; border: 3px solid #e2e8f0; border-top-color: #4f46e5; border-radius: 50%; animation: spin 1s linear infinite;">
       </div>
-      <p style="margin-top: 16px; font-weight: 500;">Caricamento GeoClock...</p>
+      <p style="margin-top: 16px; font-weight: 700; letter-spacing: -0.02em;">GeoClock sta caricando...</p>
     </div>
   </div>
+
+  <script src="app.js"></script>
+
   <style>
     @keyframes spin {
       to {
@@ -24,7 +32,6 @@
       }
     }
   </style>
-  <script type="module" src="/src/main.tsx"></script>
 </body>
 
 </html>
