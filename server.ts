@@ -41,8 +41,20 @@ db.exec(`
     out_lat REAL,
     out_lon REAL,
     location_id INTEGER,
+    notes TEXT,
     FOREIGN KEY (user_id) REFERENCES users(id),
     FOREIGN KEY (location_id) REFERENCES locations(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS holidays (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    type TEXT CHECK(type IN ('holiday', 'sick', 'permit')) NOT NULL,
+    start_date DATE NOT NULL,
+    end_date DATE NOT NULL,
+    status TEXT CHECK(status IN ('pending', 'approved', 'rejected')) DEFAULT 'pending',
+    notes TEXT,
+    FOREIGN KEY (user_id) REFERENCES users(id)
   );
 `);
 
@@ -58,7 +70,7 @@ if (!adminExists) {
     hash,
     "admin"
   );
-  
+
   // Seed a test employee
   const empHash = bcrypt.hashSync("user123", 10);
   db.prepare("INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, ?)").run(
@@ -95,15 +107,15 @@ const authenticate = (req: any, res: any, next: any) => {
 // Distance Helper (Haversine)
 function getDistance(lat1: number, lon1: number, lat2: number, lon2: number) {
   const R = 6371e3; // metres
-  const φ1 = lat1 * Math.PI/180;
-  const φ2 = lat2 * Math.PI/180;
-  const Δφ = (lat2-lat1) * Math.PI/180;
-  const Δλ = (lon2-lon1) * Math.PI/180;
+  const φ1 = lat1 * Math.PI / 180;
+  const φ2 = lat2 * Math.PI / 180;
+  const Δφ = (lat2 - lat1) * Math.PI / 180;
+  const Δλ = (lon2 - lon1) * Math.PI / 180;
 
-  const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
-          Math.cos(φ1) * Math.cos(φ2) *
-          Math.sin(Δλ/2) * Math.sin(Δλ/2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+    Math.cos(φ1) * Math.cos(φ2) *
+    Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 
   return R * c; // in metres
 }
@@ -111,26 +123,32 @@ function getDistance(lat1: number, lon1: number, lat2: number, lon2: number) {
 // API Routes
 app.post("/api/auth/login", (req, res) => {
   const { email, password } = req.body;
+  console.log(`Login attempt for: ${email}`);
   const user: any = db.prepare("SELECT * FROM users WHERE email = ?").get(email);
   if (!user || !bcrypt.compareSync(password, user.password_hash)) {
+    console.warn(`Login failed for: ${email}`);
     return res.status(401).json({ error: "Credenziali non valide" });
   }
+  console.log(`Login successful for: ${user.name} (${user.role})`);
   const token = jwt.sign({ id: user.id, role: user.role, name: user.name }, JWT_SECRET);
   res.json({ token, user: { id: user.id, name: user.name, role: user.role } });
 });
 
+// Ensure columns exist (Migration)
+try {
+  db.exec("ALTER TABLE work_sessions ADD COLUMN notes TEXT");
+} catch (e) { /* column already exists */ }
+
 app.post("/api/clock-in", authenticate, (req: any, res) => {
   try {
-    const { lat, lon } = req.body;
+    const { lat, lon, notes } = req.body;
     if (typeof lat !== 'number' || typeof lon !== 'number') {
       return res.status(400).json({ error: "Coordinate non valide" });
     }
-    
-    // Check if user already has an open session
+
     const openSession = db.prepare("SELECT * FROM work_sessions WHERE user_id = ? AND out_time IS NULL").get(req.user.id);
     if (openSession) return res.status(400).json({ error: "Hai già una sessione aperta" });
 
-    // Find nearest location
     const locations: any[] = db.prepare("SELECT * FROM locations").all();
     let nearestLocation = null;
     for (const loc of locations) {
@@ -141,8 +159,8 @@ app.post("/api/clock-in", authenticate, (req: any, res) => {
       }
     }
 
-    db.prepare("INSERT INTO work_sessions (user_id, in_lat, in_lon, location_id) VALUES (?, ?, ?, ?)").run(
-      req.user.id, lat, lon, nearestLocation?.id || null
+    db.prepare("INSERT INTO work_sessions (user_id, in_lat, in_lon, location_id, notes) VALUES (?, ?, ?, ?, ?)").run(
+      req.user.id, lat, lon, nearestLocation?.id || null, notes || null
     );
     res.json({ success: true, message: "Entrata registrata correttamente" });
   } catch (error) {
@@ -153,7 +171,7 @@ app.post("/api/clock-in", authenticate, (req: any, res) => {
 
 app.post("/api/clock-out", authenticate, (req: any, res) => {
   try {
-    const { lat, lon } = req.body;
+    const { lat, lon, notes } = req.body;
     if (typeof lat !== 'number' || typeof lon !== 'number') {
       return res.status(400).json({ error: "Coordinate non valide" });
     }
@@ -161,8 +179,11 @@ app.post("/api/clock-out", authenticate, (req: any, res) => {
     const openSession: any = db.prepare("SELECT * FROM work_sessions WHERE user_id = ? AND out_time IS NULL").get(req.user.id);
     if (!openSession) return res.status(400).json({ error: "Nessuna sessione aperta da chiudere" });
 
-    db.prepare("UPDATE work_sessions SET out_time = CURRENT_TIMESTAMP, out_lat = ?, out_lon = ? WHERE id = ?").run(
-      lat, lon, openSession.id
+    // Update notes if provided at clock-out, or keep existing
+    const finalNotes = notes ? (openSession.notes ? `${openSession.notes}\n---\n${notes}` : notes) : openSession.notes;
+
+    db.prepare("UPDATE work_sessions SET out_time = CURRENT_TIMESTAMP, out_lat = ?, out_lon = ?, notes = ? WHERE id = ?").run(
+      lat, lon, finalNotes, openSession.id
     );
     res.json({ success: true, message: "Uscita registrata correttamente" });
   } catch (error) {
@@ -181,6 +202,39 @@ app.get("/api/history", authenticate, (req: any, res) => {
   `).all(req.user.id);
   res.json(history);
 });
+
+// Holiday Routes
+app.get("/api/holidays", authenticate, (req: any, res) => {
+  const holidays = db.prepare("SELECT * FROM holidays WHERE user_id = ? ORDER BY start_date DESC").all(req.user.id);
+  res.json(holidays);
+});
+
+app.post("/api/holidays", authenticate, (req: any, res) => {
+  const { type, start_date, end_date, notes } = req.body;
+  db.prepare("INSERT INTO holidays (user_id, type, start_date, end_date, notes) VALUES (?, ?, ?, ?, ?)").run(
+    req.user.id, type, start_date, end_date, notes
+  );
+  res.json({ success: true, message: "Richiesta inviata" });
+});
+
+app.get("/api/admin/holidays", authenticate, (req: any, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: "Forbidden" });
+  const holidays = db.prepare(`
+    SELECT h.*, u.name as user_name 
+    FROM holidays h 
+    JOIN users u ON h.user_id = u.id 
+    ORDER BY h.start_date DESC
+  `).all();
+  res.json(holidays);
+});
+
+app.post("/api/admin/holidays/status", authenticate, (req: any, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: "Forbidden" });
+  const { id, status } = req.body;
+  db.prepare("UPDATE holidays SET status = ? WHERE id = ?").run(status, id);
+  res.json({ success: true });
+});
+
 
 // Admin Routes
 app.get("/api/admin/records", authenticate, (req: any, res) => {
@@ -242,7 +296,7 @@ app.get("/api/download-project", (req, res) => {
   try {
     const zip = new AdmZip();
     const rootPath = __dirname;
-    
+
     // Add files to zip, excluding node_modules, dist, .git, and the database
     const filesToInclude = [
       "src",
@@ -276,13 +330,13 @@ app.get("/api/download-project", (req, res) => {
     });
 
     const zipBuffer = zip.toBuffer();
-    
+
     res.set({
       "Content-Type": "application/zip",
       "Content-Disposition": 'attachment; filename="geoclock-project.zip"',
       "Content-Length": zipBuffer.length
     });
-    
+
     res.send(zipBuffer);
   } catch (error) {
     console.error("Download project error:", error);
@@ -299,7 +353,7 @@ async function startServer() {
       appType: "spa",
     });
     app.use(vite.middlewares);
-    
+
     // Catch-all to serve index.html for SPA routes in dev mode
     app.get("*", async (req, res, next) => {
       if (req.originalUrl.startsWith('/api')) return next();

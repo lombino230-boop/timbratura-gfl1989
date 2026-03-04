@@ -1,21 +1,37 @@
 import React, { useState, useEffect, createContext, useContext } from 'react';
-import { 
-  Clock, 
-  MapPin, 
-  History, 
-  User, 
-  LogOut, 
-  Shield, 
-  ChevronRight, 
-  CheckCircle2, 
+import {
+  Clock,
+  MapPin,
+  History,
+  User,
+  LogOut,
+  Shield,
+  ChevronRight,
+  CheckCircle2,
   AlertCircle,
   Users,
   Building2,
   Map as MapIcon,
-  Download
+  Download,
+  Calendar as CalendarIcon,
+  Palmtree,
+  Stethoscope,
+  ChevronLeft
 } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
-import { format } from 'date-fns';
+import { motion, AnimatePresence, useMotionValue, useTransform } from 'motion/react';
+import {
+  format,
+  startOfMonth,
+  endOfMonth,
+  startOfWeek,
+  endOfWeek,
+  eachDayOfInterval,
+  isSameMonth,
+  isSameDay,
+  addMonths,
+  subMonths
+} from 'date-fns';
+
 import { it } from 'date-fns/locale';
 import { MapContainer, TileLayer, Marker, Popup, Circle } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -56,7 +72,9 @@ interface Record {
   out_lat: number | null;
   out_lon: number | null;
   location_name: string | null;
+  notes: string | null;
 }
+
 
 interface Location {
   id: number;
@@ -65,6 +83,18 @@ interface Location {
   lon: number;
   radius_meters: number;
 }
+
+interface Holiday {
+  id: number;
+  user_id: number;
+  user_name?: string;
+  type: 'holiday' | 'sick' | 'permit';
+  start_date: string;
+  end_date: string;
+  status: 'pending' | 'approved' | 'rejected';
+  notes: string | null;
+}
+
 
 // --- Auth Context ---
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -77,7 +107,225 @@ const useAuth = () => {
 
 // --- Components ---
 
-// --- Mock Data for Static Hosting ---
+const SliderButton = ({ onConfirm, type, loading }: { onConfirm: () => void, type: 'in' | 'out', loading: boolean }) => {
+  const x = useMotionValue(0);
+  const maxWidth = 260; // Approximate width of the slider track minus the handle
+  const opacity = useTransform(x, [0, maxWidth], [1, 0]);
+  const scale = useTransform(x, [0, maxWidth], [1, 1.1]);
+
+  useEffect(() => {
+    const unsubscribe = x.onChange(latest => {
+      if (latest >= maxWidth && !loading) {
+        onConfirm();
+        x.set(0); // Reset after confirm
+      }
+    });
+    return () => unsubscribe();
+  }, [x, loading, onConfirm]);
+
+  return (
+    <div className={`relative h-20 rounded-2xl p-2 flex items-center overflow-hidden transition-colors ${type === 'in' ? 'bg-indigo-100' : 'bg-red-100'}`}>
+      <motion.div
+        style={{ opacity }}
+        className="absolute inset-0 flex items-center justify-center pointer-events-none"
+      >
+        <span className={`font-bold tracking-wider ${type === 'in' ? 'text-indigo-400' : 'text-red-400'}`}>
+          TRASCINA PER {type === 'in' ? 'ENTRARE' : 'USCIRE'}
+        </span>
+      </motion.div>
+
+      <motion.div
+        drag="x"
+        dragConstraints={{ left: 0, right: maxWidth }}
+        dragElastic={0.1}
+        dragTransition={{ bounceStiffness: 600, bounceDamping: 20 }}
+        style={{ x, scale }}
+        className={`w-16 h-16 rounded-xl flex items-center justify-center cursor-grab active:cursor-grabbing shadow-lg z-10 ${type === 'in' ? 'bg-indigo-600' : 'bg-red-500'}`}
+      >
+        {loading ? (
+          <div className="w-6 h-6 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+        ) : (
+          type === 'in' ? <ChevronRight className="text-white" size={32} /> : <LogOut className="text-white" size={28} />
+        )}
+      </motion.div>
+
+      {/* Track Background for Completed Area */}
+      <motion.div
+        style={{ width: x }}
+        className={`absolute left-0 top-0 bottom-0 opacity-20 ${type === 'in' ? 'bg-indigo-600' : 'bg-red-500'}`}
+      />
+    </div>
+  );
+};
+
+
+const CalendarDashboard = ({ history, holidays }: { history: Record[], holidays: Holiday[] }) => {
+  const [currentMonth, setCurrentMonth] = useState(new Date());
+
+  const days = eachDayOfInterval({
+    start: startOfWeek(startOfMonth(currentMonth), { weekStartsOn: 1 }),
+    end: endOfWeek(endOfMonth(currentMonth), { weekStartsOn: 1 })
+  });
+
+  const getDayData = (day: Date) => {
+    const records = history.filter(r => isSameDay(new Date(r.in_time), day));
+    const dayHolidays = holidays.filter(h => {
+      const start = new Date(h.start_date);
+      const end = new Date(h.end_date);
+      return day >= start && day <= end && h.status === 'approved';
+    });
+    return { records, holidays: dayHolidays };
+  };
+
+  return (
+    <div className="bg-white rounded-3xl shadow-xl border border-slate-100 overflow-hidden">
+      <div className="p-6 flex justify-between items-center border-b border-slate-100">
+        <h3 className="font-bold text-slate-800 capitalize">{format(currentMonth, 'MMMM yyyy', { locale: it })}</h3>
+        <div className="flex gap-2">
+          <button onClick={() => setCurrentMonth(subMonths(currentMonth, 1))} className="p-2 hover:bg-slate-50 rounded-xl transition-colors"><ChevronLeft size={20} /></button>
+          <button onClick={() => setCurrentMonth(addMonths(currentMonth, 1))} className="p-2 hover:bg-slate-50 rounded-xl transition-colors"><ChevronRight size={20} /></button>
+        </div>
+      </div>
+      <div className="grid grid-cols-7 border-b border-slate-50 bg-slate-50/50">
+        {['Lun', 'Mar', 'Mer', 'Gio', 'Ven', 'Sab', 'Dom'].map(d => (
+          <div key={d} className="py-2 text-center text-[10px] font-black text-slate-400 uppercase tracking-widest">{d}</div>
+        ))}
+      </div>
+      <div className="grid grid-cols-7">
+        {days.map((day, i) => {
+          const { records, holidays } = getDayData(day);
+          const isCurrentMonth = isSameMonth(day, currentMonth);
+          const isToday = isSameDay(day, new Date());
+
+          return (
+            <div key={i} className={`h-24 border-b border-r border-slate-50 p-1 flex flex-col gap-1 ${!isCurrentMonth ? 'bg-slate-50/30' : ''}`}>
+              <span className={`text-[10px] font-bold w-5 h-5 flex items-center justify-center rounded-full ${isToday ? 'bg-indigo-600 text-white' : 'text-slate-400'}`}>
+                {format(day, 'd')}
+              </span>
+              <div className="flex-1 overflow-y-auto space-y-1 scrollbar-hide">
+                {records.map(r => (
+                  <div key={r.id} className="text-[8px] bg-green-100 text-green-700 p-1 rounded font-bold truncate">
+                    Work: {format(new Date(r.in_time), 'HH:mm')}
+                  </div>
+                ))}
+                {holidays.map(h => (
+                  <div key={h.id} className={`text-[8px] p-1 rounded font-bold truncate ${h.type === 'sick' ? 'bg-red-100 text-red-700' : 'bg-orange-100 text-orange-700'}`}>
+                    {h.type === 'sick' ? 'Malattia' : 'Ferie'}
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+const HolidayManagement = ({ holidays, onUpdate, token }: { holidays: Holiday[], onUpdate: () => void, token: string }) => {
+  const [showForm, setShowForm] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    setLoading(true);
+    const formData = new FormData(e.currentTarget);
+    const data = Object.fromEntries(formData);
+
+    try {
+      const res = await apiFetch('/api/holidays', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify(data)
+      });
+      if (res.ok) {
+        onUpdate();
+        setShowForm(false);
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <h3 className="text-xl font-bold text-slate-800">Le mie Ferie</h3>
+        <button
+          onClick={() => setShowForm(!showForm)}
+          className="bg-indigo-600 text-white px-4 py-2 rounded-xl text-sm font-bold shadow-lg shadow-indigo-100"
+        >
+          {showForm ? 'Chiudi' : 'Nuova Richiesta'}
+        </button>
+      </div>
+
+      <AnimatePresence>
+        {showForm && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            className="bg-white p-6 rounded-3xl border border-slate-100 shadow-xl"
+          >
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Tipo</label>
+                  <select name="type" className="w-full px-4 py-3 rounded-xl border border-slate-100 bg-slate-50 text-sm font-bold">
+                    <option value="holiday">Ferie</option>
+                    <option value="sick">Malattia</option>
+                    <option value="permit">Permesso</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Note</label>
+                  <input name="notes" placeholder="Opzionale..." className="w-full px-4 py-3 rounded-xl border border-slate-100 bg-slate-50 text-sm" />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Inizio</label>
+                  <input name="start_date" type="date" required className="w-full px-4 py-3 rounded-xl border border-slate-100 bg-slate-50 text-sm" />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Fine</label>
+                  <input name="end_date" type="date" required className="w-full px-4 py-3 rounded-xl border border-slate-100 bg-slate-50 text-sm" />
+                </div>
+              </div>
+              <button disabled={loading} type="submit" className="w-full bg-indigo-600 text-white font-bold py-3 rounded-xl">
+                {loading ? 'Invio in corso...' : 'Invia Richiesta'}
+              </button>
+            </form>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <div className="space-y-3">
+        {holidays.map(h => (
+          <div key={h.id} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <div className={`p-3 rounded-xl ${h.type === 'sick' ? 'bg-red-50 text-red-500' : 'bg-orange-50 text-orange-500'}`}>
+                {h.type === 'sick' ? <Stethoscope size={20} /> : <Palmtree size={20} />}
+              </div>
+              <div>
+                <p className="font-bold text-slate-800 capitalize">{h.type}</p>
+                <p className="text-xs text-slate-400 font-bold">
+                  {format(new Date(h.start_date), 'd MMM')} - {format(new Date(h.end_date), 'd MMM')}
+                </p>
+              </div>
+            </div>
+            <span className={`px-2 py-1 rounded-lg text-[10px] font-black uppercase tracking-tight ${h.status === 'approved' ? 'bg-green-100 text-green-700' :
+              h.status === 'rejected' ? 'bg-red-100 text-red-700' :
+                'bg-slate-100 text-slate-400'
+              }`}>
+              {h.status === 'pending' ? 'In attesa' : h.status === 'approved' ? 'Approvata' : 'Rifiutata'}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
 const MOCK_USERS = [
   { id: 1, name: 'Mario Rossi', email: 'mario@geoclock.it', role: 'employee' as const },
   { id: 2, name: 'Admin', email: 'admin@geoclock.it', role: 'admin' as const }
@@ -100,7 +348,7 @@ const apiFetch = async (url: string, options: any = {}) => {
     throw new Error('Server error');
   } catch (err) {
     console.warn(`API ${url} failed, falling back to mock mode`, err);
-    
+
     // Mock Login
     if (url === '/api/auth/login' && options.method === 'POST') {
       const { email, password } = JSON.parse(options.body);
@@ -139,15 +387,15 @@ const apiFetch = async (url: string, options: any = {}) => {
       const records = getMockData<Record[]>('records', []);
       if (type === 'in') {
         const body = JSON.parse(options.body);
-        const newRecord = { 
-          id: Date.now(), 
-          user_id: 1, 
+        const newRecord = {
+          id: Date.now(),
+          user_id: 1,
           user_name: 'Mario Rossi',
-          in_time: new Date().toISOString(), 
-          in_lat: body.lat, 
+          in_time: new Date().toISOString(),
+          in_lat: body.lat,
           in_lon: body.lon,
-          out_time: null, 
-          out_lat: null, 
+          out_time: null,
+          out_lat: null,
           out_lon: null,
           location_name: 'Sede Centrale (Mock)'
         };
@@ -180,9 +428,28 @@ const apiFetch = async (url: string, options: any = {}) => {
       return { ok: true, json: async () => locations };
     }
 
+    // Mock Holidays
+    if (url.startsWith('/api/holidays') || url.startsWith('/api/admin/holidays')) {
+      const holidays = getMockData<Holiday[]>('holidays', []);
+      if (options.method === 'POST') {
+        const body = JSON.parse(options.body);
+        if (url.includes('status')) {
+          const updated = holidays.map(h => h.id === body.id ? { ...h, status: body.status } : h);
+          saveMockData('holidays', updated);
+          return { ok: true, json: async () => ({ success: true }) };
+        }
+        const newHoliday = { ...body, id: Date.now(), status: 'pending', user_name: 'Mario Rossi' };
+        const updated = [newHoliday, ...holidays];
+        saveMockData('holidays', updated);
+        return { ok: true, json: async () => ({ success: true, message: 'Richiesta inviata (Mock Mode)' }) };
+      }
+      return { ok: true, json: async () => holidays };
+    }
+
     throw err;
   }
 };
+
 
 const Login = () => {
   const { login } = useAuth();
@@ -216,7 +483,7 @@ const Login = () => {
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4 bg-slate-50">
-      <motion.div 
+      <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         className="max-w-md w-full bg-white rounded-3xl shadow-xl p-8 border border-slate-100"
@@ -232,8 +499,8 @@ const Login = () => {
         <form onSubmit={handleSubmit} className="space-y-6">
           <div>
             <label className="block text-sm font-semibold text-slate-700 mb-2">Email</label>
-            <input 
-              type="email" 
+            <input
+              type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
@@ -243,8 +510,8 @@ const Login = () => {
           </div>
           <div>
             <label className="block text-sm font-semibold text-slate-700 mb-2">Password</label>
-            <input 
-              type="password" 
+            <input
+              type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
@@ -260,7 +527,7 @@ const Login = () => {
             </div>
           )}
 
-          <button 
+          <button
             type="submit"
             disabled={loading}
             className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 rounded-xl shadow-lg shadow-indigo-200 transition-all disabled:opacity-50"
@@ -283,24 +550,36 @@ const Login = () => {
 
 const EmployeeDashboard = () => {
   const { user, token, logout } = useAuth();
-  const [coords, setCoords] = useState<{lat: number, lon: number} | null>(null);
+  const [activeTab, setActiveTab] = useState<'home' | 'calendar' | 'holidays'>('home');
+  const [coords, setCoords] = useState<{ lat: number, lon: number } | null>(null);
   const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [message, setMessage] = useState('');
   const [history, setHistory] = useState<Record[]>([]);
+  const [holidays, setHolidays] = useState<Holiday[]>([]);
   const [activeSession, setActiveSession] = useState<Record | null>(null);
+  const [notes, setNotes] = useState('');
 
   const fetchHistory = async () => {
     const res = await apiFetch('/api/history', {
       headers: { 'Authorization': `Bearer ${token}` }
     });
     const data = await res.json();
-    setHistory(data);
-    const open = data.find((r: Record) => !r.out_time);
+    setHistory(Array.isArray(data) ? data : []);
+    const open = Array.isArray(data) ? data.find((r: Record) => !r.out_time) : null;
     setActiveSession(open || null);
+  };
+
+  const fetchHolidays = async () => {
+    const res = await apiFetch('/api/holidays', {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    const data = await res.json();
+    setHolidays(Array.isArray(data) ? data : []);
   };
 
   useEffect(() => {
     fetchHistory();
+    fetchHolidays();
     if ("geolocation" in navigator) {
       navigator.geolocation.getCurrentPosition(
         (pos) => setCoords({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
@@ -312,7 +591,7 @@ const EmployeeDashboard = () => {
   const handleClock = async (type: 'in' | 'out') => {
     setStatus('loading');
     setMessage('');
-    
+
     if (!coords) {
       navigator.geolocation.getCurrentPosition(
         async (pos) => {
@@ -330,20 +609,21 @@ const EmployeeDashboard = () => {
     }
   };
 
-  const performClock = async (type: 'in' | 'out', c: {lat: number, lon: number}) => {
+  const performClock = async (type: 'in' | 'out', c: { lat: number, lon: number }) => {
     try {
       const res = await apiFetch(`/api/clock-${type}`, {
         method: 'POST',
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
         },
-        body: JSON.stringify(c)
+        body: JSON.stringify({ ...c, notes })
       });
       const data = await res.json();
       if (res.ok) {
         setStatus('success');
         setMessage(data.message);
+        setNotes('');
         fetchHistory();
       } else {
         setStatus('error');
@@ -355,142 +635,172 @@ const EmployeeDashboard = () => {
     }
   };
 
+
   return (
-    <div className="max-w-2xl mx-auto p-4 pb-24">
-      <header className="flex justify-between items-center mb-8 pt-4">
-        <div>
-          <h2 className="text-2xl font-bold text-slate-900">Ciao, {user?.name}</h2>
-          <p className="text-slate-500 text-sm">{format(new Date(), "EEEE d MMMM", { locale: it })}</p>
-        </div>
-        <button onClick={logout} className="p-2 text-slate-400 hover:text-red-500 transition-colors">
-          <LogOut size={24} />
-        </button>
-      </header>
-
-      {/* Main Action Card */}
-      <motion.div 
-        initial={{ opacity: 0, scale: 0.95 }}
-        animate={{ opacity: 1, scale: 1 }}
-        className="bg-white rounded-3xl shadow-xl p-8 mb-8 border border-slate-100 relative overflow-hidden"
-      >
-        <div className="relative z-10">
-          <div className="flex items-center gap-3 mb-6">
-            <div className={`w-3 h-3 rounded-full animate-pulse ${activeSession ? 'bg-green-500' : 'bg-slate-300'}`} />
-            <span className="text-sm font-bold uppercase tracking-wider text-slate-400">
-              {activeSession ? 'Sessione in corso' : 'Nessuna attività'}
-            </span>
+    <div className="min-h-screen bg-slate-50 pb-24">
+      <div className="max-w-2xl mx-auto p-4">
+        <header className="flex justify-between items-center mb-8 pt-4">
+          <div>
+            <h2 className="text-2xl font-bold text-slate-900">Ciao, {user?.name}</h2>
+            <p className="text-slate-500 text-sm">{format(new Date(), "EEEE d MMMM", { locale: it })}</p>
           </div>
+          <button onClick={logout} className="p-2 text-slate-400 hover:text-red-500 transition-colors">
+            <LogOut size={24} />
+          </button>
+        </header>
 
-          <div className="grid grid-cols-1 gap-4">
-            {!activeSession ? (
-              <button 
-                onClick={() => handleClock('in')}
-                disabled={status === 'loading'}
-                className="group relative bg-indigo-600 hover:bg-indigo-700 text-white p-8 rounded-2xl shadow-lg shadow-indigo-200 transition-all flex flex-col items-center justify-center gap-4"
-              >
-                <div className="w-16 h-16 bg-white/20 rounded-full flex items-center justify-center group-hover:scale-110 transition-transform">
-                  <Clock size={32} />
-                </div>
-                <span className="text-xl font-bold">TIMBRA ENTRATA</span>
-              </button>
-            ) : (
-              <button 
-                onClick={() => handleClock('out')}
-                disabled={status === 'loading'}
-                className="group relative bg-red-500 hover:bg-red-600 text-white p-8 rounded-2xl shadow-lg shadow-red-200 transition-all flex flex-col items-center justify-center gap-4"
-              >
-                <div className="w-16 h-16 bg-white/20 rounded-full flex items-center justify-center group-hover:scale-110 transition-transform">
-                  <LogOut size={32} />
-                </div>
-                <span className="text-xl font-bold">TIMBRA USCITA</span>
-              </button>
-            )}
-          </div>
+        <AnimatePresence mode="wait">
+          {activeTab === 'home' && (
+            <motion.div
+              key="home"
+              initial={{ opacity: 0, x: -20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: 20 }}
+              className="space-y-8"
+            >
+              <div className="bg-white rounded-3xl shadow-xl p-8 border border-slate-100 relative overflow-hidden">
+                <div className="relative z-10">
+                  <div className="flex items-center gap-3 mb-6">
+                    <div className={`w-3 h-3 rounded-full animate-pulse ${activeSession ? 'bg-green-500' : 'bg-slate-300'}`} />
+                    <span className="text-sm font-bold uppercase tracking-wider text-slate-400">
+                      {activeSession ? 'In servizio' : 'Fuori servizio'}
+                    </span>
+                  </div>
 
-          <AnimatePresence>
-            {message && (
-              <motion.div 
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: 'auto' }}
-                exit={{ opacity: 0, height: 0 }}
-                className={`mt-6 p-4 rounded-xl flex items-center gap-3 ${status === 'success' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}
-              >
-                {status === 'success' ? <CheckCircle2 size={20} /> : <AlertCircle size={20} />}
-                <span className="font-medium">{message}</span>
-              </motion.div>
-            )}
-          </AnimatePresence>
+                  <div className="mb-6">
+                    <label className="block text-sm font-semibold text-slate-600 mb-2">Note (opzionale)</label>
+                    <textarea
+                      value={notes}
+                      onChange={(e) => setNotes(e.target.value)}
+                      placeholder="Esempio: In ritardo per traffico, Note turno..."
+                      className="w-full px-4 py-3 rounded-xl border border-slate-100 bg-slate-50 focus:ring-2 focus:ring-indigo-500 outline-none transition-all resize-none h-20 text-sm"
+                    />
+                  </div>
 
-          <div className="mt-8 flex items-center justify-center gap-2 text-slate-400 text-sm">
-            <MapPin size={16} />
-            {coords ? `${coords.lat.toFixed(4)}, ${coords.lon.toFixed(4)}` : 'Ricerca posizione...'}
-          </div>
-        </div>
-      </motion.div>
+                  <SliderButton
+                    type={activeSession ? 'out' : 'in'}
+                    onConfirm={() => handleClock(activeSession ? 'out' : 'in')}
+                    loading={status === 'loading'}
+                  />
 
-      {/* History Section */}
-      <div className="space-y-4">
-        <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-          <History size={20} className="text-indigo-500" />
-          Storico Recente
-        </h3>
-        
-        <div className="space-y-3">
-          {history.map((record) => (
-            <div key={record.id} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
-              <div className="flex items-center gap-4">
-                <div className={`p-3 rounded-xl ${record.out_time ? 'bg-slate-50 text-slate-400' : 'bg-indigo-50 text-indigo-600'}`}>
-                  <Clock size={20} />
-                </div>
-                <div>
-                  <p className="font-bold text-slate-800">
-                    {format(new Date(record.in_time), "d MMM HH:mm", { locale: it })}
-                    {record.out_time && ` - ${format(new Date(record.out_time), "HH:mm")}`}
-                  </p>
-                  <p className="text-xs text-slate-500 flex items-center gap-1">
-                    <MapPin size={12} />
-                    {record.location_name || 'Posizione Esterna'}
-                  </p>
+                  {message && (
+                    <motion.div
+                      key="msg"
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: 'auto' }}
+                      className={`mt-6 p-4 rounded-xl flex items-center gap-3 ${status === 'success' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}
+                    >
+                      {status === 'success' ? <CheckCircle2 size={20} /> : <AlertCircle size={20} />}
+                      <span className="font-medium text-sm">{message}</span>
+                    </motion.div>
+                  )}
+
+                  <div className="mt-8 flex items-center justify-center gap-2 text-slate-400 text-xs">
+                    <MapPin size={14} />
+                    {coords ? `${coords.lat.toFixed(4)}, ${coords.lon.toFixed(4)}` : 'Ricerca posizione...'}
+                  </div>
                 </div>
               </div>
-              <ChevronRight size={20} className="text-slate-300" />
-            </div>
-          ))}
-          {history.length === 0 && (
-            <div className="text-center py-12 text-slate-400">
-              Nessuna timbratura registrata
-            </div>
+
+              <div className="space-y-4">
+                <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                  <History size={20} className="text-indigo-500" />
+                  Storico Recente
+                </h3>
+                <div className="space-y-3">
+                  {history.slice(0, 5).map((record) => (
+                    <div key={record.id} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-4">
+                          <div className={`p-3 rounded-xl ${record.out_time ? 'bg-slate-50 text-slate-400' : 'bg-indigo-50 text-indigo-600'}`}>
+                            <Clock size={20} />
+                          </div>
+                          <div>
+                            <p className="font-bold text-slate-800">
+                              {format(new Date(record.in_time), "HH:mm", { locale: it })}
+                              {record.out_time && ` - ${format(new Date(record.out_time), "HH:mm", { locale: it })}`}
+                            </p>
+                            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
+                              {format(new Date(record.in_time), "EEEE d MMMM", { locale: it })}
+                            </p>
+                          </div>
+                        </div>
+                        <ChevronRight size={20} className="text-slate-300" />
+                      </div>
+                      {record.notes && (
+                        <div className="mt-2 pl-14 text-xs text-slate-500 italic border-l-2 border-slate-100 ml-6">
+                          {record.notes}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  {history.length === 0 && (
+                    <div className="text-center py-12 text-slate-400">Nessuna timbratura registrata</div>
+                  )}
+                </div>
+              </div>
+            </motion.div>
           )}
-        </div>
+
+          {activeTab === 'calendar' && (
+            <motion.div key="calendar" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}>
+              <CalendarDashboard history={history} holidays={holidays} />
+            </motion.div>
+          )}
+
+          {activeTab === 'holidays' && (
+            <motion.div key="holidays" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}>
+              <HolidayManagement holidays={holidays} onUpdate={fetchHolidays} token={token || ''} />
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
+
+      <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-100 px-6 py-3 flex justify-around items-center z-50">
+        <button onClick={() => setActiveTab('home')} className={`flex flex-col items-center gap-1 transition-all ${activeTab === 'home' ? 'text-indigo-600' : 'text-slate-400'}`}>
+          <Clock size={24} fill={activeTab === 'home' ? 'currentColor' : 'none'} fillOpacity={0.2} />
+          <span className="text-[10px] font-bold">TIMBRA</span>
+        </button>
+        <button onClick={() => setActiveTab('calendar')} className={`flex flex-col items-center gap-1 transition-all ${activeTab === 'calendar' ? 'text-indigo-600' : 'text-slate-400'}`}>
+          <CalendarIcon size={24} fill={activeTab === 'calendar' ? 'currentColor' : 'none'} fillOpacity={0.2} />
+          <span className="text-[10px] font-bold">CALENDARIO</span>
+        </button>
+        <button onClick={() => setActiveTab('holidays')} className={`flex flex-col items-center gap-1 transition-all ${activeTab === 'holidays' ? 'text-indigo-600' : 'text-slate-400'}`}>
+          <Palmtree size={24} fill={activeTab === 'holidays' ? 'currentColor' : 'none'} fillOpacity={0.2} />
+          <span className="text-[10px] font-bold">FERIE</span>
+        </button>
+      </nav>
     </div>
   );
 };
+
 
 const AdminDashboard = () => {
   const { token, logout } = useAuth();
   const [records, setRecords] = useState<Record[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
-  const [activeTab, setActiveTab] = useState<'records' | 'map' | 'users' | 'locations'>('records');
+  const [adminHolidays, setAdminHolidays] = useState<Holiday[]>([]);
+  const [activeTab, setActiveTab] = useState<'records' | 'map' | 'users' | 'locations' | 'holidays'>('records');
 
   const fetchData = async () => {
     try {
-      const [recRes, userRes, locRes] = await Promise.all([
+      const [recRes, userRes, locRes, holRes] = await Promise.all([
         apiFetch('/api/admin/records', { headers: { 'Authorization': `Bearer ${token}` } }),
         apiFetch('/api/admin/users', { headers: { 'Authorization': `Bearer ${token}` } }),
-        apiFetch('/api/admin/locations', { headers: { 'Authorization': `Bearer ${token}` } })
+        apiFetch('/api/admin/locations', { headers: { 'Authorization': `Bearer ${token}` } }),
+        apiFetch('/api/admin/holidays', { headers: { 'Authorization': `Bearer ${token}` } })
       ]);
-      
-      if (recRes.ok && userRes.ok && locRes.ok) {
-        setRecords(await recRes.json());
-        setUsers(await userRes.json());
-        setLocations(await locRes.json());
-      }
+
+      if (recRes.ok) setRecords(await recRes.json());
+      if (userRes.ok) setUsers(await userRes.json());
+      if (locRes.ok) setLocations(await locRes.json());
+      if (holRes.ok) setAdminHolidays(await holRes.json());
     } catch (error) {
       console.error("Error fetching admin data:", error);
     }
   };
+
 
   useEffect(() => {
     fetchData();
@@ -507,36 +817,44 @@ const AdminDashboard = () => {
           </div>
           <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">Admin Panel</span>
         </div>
-        
+
         <nav className="flex-1 p-4 space-y-2">
-          <button 
+          <button
             onClick={() => setActiveTab('records')}
             className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${activeTab === 'records' ? 'bg-indigo-50 text-indigo-600 font-bold' : 'text-slate-500 hover:bg-slate-50'}`}
           >
             <History size={20} />
             Timbrature
           </button>
-          <button 
+          <button
             onClick={() => setActiveTab('map')}
             className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${activeTab === 'map' ? 'bg-indigo-50 text-indigo-600 font-bold' : 'text-slate-500 hover:bg-slate-50'}`}
           >
             <MapIcon size={20} />
             Mappa Live
           </button>
-          <button 
+          <button
             onClick={() => setActiveTab('users')}
             className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${activeTab === 'users' ? 'bg-indigo-50 text-indigo-600 font-bold' : 'text-slate-500 hover:bg-slate-50'}`}
           >
             <Users size={20} />
             Dipendenti
           </button>
-          <button 
+          <button
             onClick={() => setActiveTab('locations')}
             className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${activeTab === 'locations' ? 'bg-indigo-50 text-indigo-600 font-bold' : 'text-slate-500 hover:bg-slate-50'}`}
           >
             <Building2 size={20} />
             Sedi
           </button>
+          <button
+            onClick={() => setActiveTab('holidays')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${activeTab === 'holidays' ? 'bg-indigo-50 text-indigo-600 font-bold' : 'text-slate-500 hover:bg-slate-50'}`}
+          >
+            <Palmtree size={20} />
+            Richieste Ferie
+          </button>
+
         </nav>
 
         <div className="p-4 border-t border-slate-100">
@@ -552,7 +870,7 @@ const AdminDashboard = () => {
         <header className="flex justify-between items-center mb-8">
           <h2 className="text-3xl font-extrabold text-slate-900 capitalize">{activeTab}</h2>
           <div className="flex gap-3">
-            <button 
+            <button
               onClick={async () => {
                 const res = await fetch('/api/download-project');
                 if (res.ok) {
@@ -587,8 +905,10 @@ const AdminDashboard = () => {
                   <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-widest">Entrata</th>
                   <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-widest">Uscita</th>
                   <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-widest">Sede</th>
+                  <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-widest">Note</th>
                   <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-widest">Stato</th>
                 </tr>
+
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {records.map((r) => (
@@ -597,11 +917,13 @@ const AdminDashboard = () => {
                     <td className="px-6 py-4 text-slate-600">{format(new Date(r.in_time), "d MMM HH:mm", { locale: it })}</td>
                     <td className="px-6 py-4 text-slate-600">{r.out_time ? format(new Date(r.out_time), "d MMM HH:mm", { locale: it }) : '-'}</td>
                     <td className="px-6 py-4 text-slate-500">{r.location_name || 'Esterna'}</td>
+                    <td className="px-6 py-4 text-slate-500 text-xs italic">{r.notes || '-'}</td>
                     <td className="px-6 py-4">
                       <span className={`px-3 py-1 rounded-full text-xs font-bold ${r.out_time ? 'bg-slate-100 text-slate-500' : 'bg-green-100 text-green-700'}`}>
                         {r.out_time ? 'Completata' : 'In corso'}
                       </span>
                     </td>
+
                   </tr>
                 ))}
               </tbody>
@@ -611,7 +933,7 @@ const AdminDashboard = () => {
 
         {activeTab === 'map' && (
           <div className="bg-white p-4 rounded-3xl shadow-sm border border-slate-200 h-[600px] overflow-hidden">
-             <MapContainer center={[41.8902, 12.4922]} zoom={6} scrollWheelZoom={true} style={{ height: '100%', width: '100%' }}>
+            <MapContainer center={[41.8902, 12.4922]} zoom={6} scrollWheelZoom={true} style={{ height: '100%', width: '100%' }}>
               <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
               {records.map(r => (
                 <Marker key={r.id} position={[r.in_lat, r.in_lon]}>
@@ -625,10 +947,10 @@ const AdminDashboard = () => {
                 </Marker>
               ))}
               {locations.map(loc => (
-                <Circle 
-                  key={loc.id} 
-                  center={[loc.lat, loc.lon]} 
-                  radius={loc.radius_meters} 
+                <Circle
+                  key={loc.id}
+                  center={[loc.lat, loc.lon]}
+                  radius={loc.radius_meters}
                   pathOptions={{ color: 'indigo', fillColor: 'indigo', fillOpacity: 0.1 }}
                 />
               ))}
@@ -640,7 +962,7 @@ const AdminDashboard = () => {
           <div className="space-y-6">
             <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
               <h3 className="text-lg font-bold text-slate-800 mb-4">Aggiungi Dipendente</h3>
-              <form 
+              <form
                 onSubmit={async (e) => {
                   e.preventDefault();
                   const formData = new FormData(e.currentTarget);
@@ -688,7 +1010,7 @@ const AdminDashboard = () => {
           <div className="space-y-6">
             <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
               <h3 className="text-lg font-bold text-slate-800 mb-4">Aggiungi Sede</h3>
-              <form 
+              <form
                 onSubmit={async (e) => {
                   e.preventDefault();
                   const formData = new FormData(e.currentTarget);
@@ -738,7 +1060,78 @@ const AdminDashboard = () => {
             </div>
           </div>
         )}
+
+        {activeTab === 'holidays' && (
+          <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="bg-slate-50 border-b border-slate-200">
+                  <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-widest">Dipendente</th>
+                  <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-widest">Tipo</th>
+                  <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-widest">Periodo</th>
+                  <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-widest">Stato</th>
+                  <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-widest text-right">Azioni</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {adminHolidays.map((h) => (
+                  <tr key={h.id} className="hover:bg-slate-50 transition-colors">
+                    <td className="px-6 py-4 font-bold text-slate-800">{h.user_name}</td>
+                    <td className="px-6 py-4 text-slate-600 capitalize">{h.type}</td>
+                    <td className="px-6 py-4 text-slate-500 text-sm">
+                      {format(new Date(h.start_date), "d MMM")} - {format(new Date(h.end_date), "d MMM")}
+                    </td>
+                    <td className="px-6 py-4">
+                      <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest ${h.status === 'approved' ? 'bg-green-100 text-green-700' :
+                        h.status === 'rejected' ? 'bg-red-100 text-red-700' :
+                          'bg-slate-100 text-slate-500'
+                        }`}>
+                        {h.status}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 text-right">
+                      {h.status === 'pending' && (
+                        <div className="flex justify-end gap-2">
+                          <button
+                            onClick={async () => {
+                              await apiFetch('/api/admin/holidays/status', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                                body: JSON.stringify({ id: h.id, status: 'approved' })
+                              });
+                              fetchData();
+                            }}
+                            className="p-2 bg-green-50 text-green-600 rounded-lg hover:bg-green-100 transition-colors"
+                          >
+                            Approva
+                          </button>
+                          <button
+                            onClick={async () => {
+                              await apiFetch('/api/admin/holidays/status', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                                body: JSON.stringify({ id: h.id, status: 'rejected' })
+                              });
+                              fetchData();
+                            }}
+                            className="p-2 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors"
+                          >
+                            Rifiuta
+                          </button>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+                {adminHolidays.length === 0 && (
+                  <tr><td colSpan={5} className="px-6 py-12 text-center text-slate-400 font-medium">Nessuna richiesta ferie</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
       </main>
+
     </div>
   );
 };
@@ -750,13 +1143,23 @@ export default function App() {
   const [isReady, setIsReady] = useState(false);
 
   useEffect(() => {
-    const savedToken = localStorage.getItem('gc_token');
-    const savedUser = localStorage.getItem('gc_user');
-    if (savedToken && savedUser) {
-      setToken(savedToken);
-      setUser(JSON.parse(savedUser));
+    try {
+      const savedToken = localStorage.getItem('gc_token');
+      const savedUser = localStorage.getItem('gc_user');
+      if (savedToken && savedUser && savedUser !== 'undefined') {
+        const parsedUser = JSON.parse(savedUser);
+        if (parsedUser && typeof parsedUser === 'object') {
+          setToken(savedToken);
+          setUser(parsedUser);
+        }
+      }
+    } catch (e) {
+      console.warn("Failed to parse saved user session:", e);
+      localStorage.removeItem('gc_token');
+      localStorage.removeItem('gc_user');
+    } finally {
+      setIsReady(true);
     }
-    setIsReady(true);
   }, []);
 
   const login = (t: string, u: User) => {
