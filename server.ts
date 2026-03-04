@@ -46,6 +46,8 @@ db.exec(`
   );
 `);
 
+console.log("Database initialized successfully");
+
 // Seed Admin if not exists
 const adminExists = db.prepare("SELECT * FROM users WHERE role = 'admin'").get();
 if (!adminExists) {
@@ -290,12 +292,46 @@ app.get("/api/download-project", (req, res) => {
 
 // Vite Integration
 async function startServer() {
+  console.log(`Starting server in ${process.env.NODE_ENV || 'development'} mode`);
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
     });
     app.use(vite.middlewares);
+    
+    // Catch-all to serve index.html for SPA routes in dev mode
+    app.get("*", async (req, res, next) => {
+      if (req.originalUrl.startsWith('/api')) return next();
+      try {
+        const template = await vite.transformIndexHtml(req.originalUrl, `
+          <!doctype html>
+          <html lang="en">
+            <head>
+              <meta charset="UTF-8" />
+              <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+              <title>GeoClock</title>
+            </head>
+            <body>
+              <div id="root">
+                <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; font-family: sans-serif; color: #64748b;">
+                  <div style="width: 40px; height: 40px; border: 3px solid #e2e8f0; border-top-color: #3b82f6; border-radius: 50%; animation: spin 1s linear infinite;"></div>
+                  <p style="margin-top: 16px; font-weight: 500;">Caricamento GeoClock...</p>
+                </div>
+              </div>
+              <style>
+                @keyframes spin { to { transform: rotate(360deg); } }
+              </style>
+              <script type="module" src="/src/main.tsx"></script>
+            </body>
+          </html>
+        `);
+        res.status(200).set({ 'Content-Type': 'text/html' }).end(template);
+      } catch (e) {
+        vite.ssrFixStacktrace(e as Error);
+        next(e);
+      }
+    });
   } else {
     app.use(express.static(path.join(__dirname, "dist")));
     app.get("*", (req, res) => {
