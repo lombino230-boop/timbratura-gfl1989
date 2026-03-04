@@ -92,14 +92,24 @@ if (!adminExists) {
 const app = express();
 app.use(express.json());
 
+// Request Logger
+app.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+  next();
+});
+
 // Auth Middleware
 const authenticate = (req: any, res: any, next: any) => {
   const token = req.headers.authorization?.split(" ")[1];
-  if (!token) return res.status(401).json({ error: "Unauthorized" });
+  if (!token) {
+    console.warn(`Unauthorized access attempt to ${req.url}`);
+    return res.status(401).json({ error: "Unauthorized" });
+  }
   try {
     req.user = jwt.verify(token, JWT_SECRET);
     next();
   } catch (e) {
+    console.error(`Invalid token for ${req.url}`);
     res.status(401).json({ error: "Invalid token" });
   }
 };
@@ -123,16 +133,34 @@ function getDistance(lat1: number, lon1: number, lat2: number, lon2: number) {
 // API Routes
 app.post("/api/auth/login", (req, res) => {
   const { email, password } = req.body;
-  console.log(`Login attempt for: ${email}`);
-  const user: any = db.prepare("SELECT * FROM users WHERE email = ?").get(email);
-  if (!user || !bcrypt.compareSync(password, user.password_hash)) {
-    console.warn(`Login failed for: ${email}`);
-    return res.status(401).json({ error: "Credenziali non valide" });
+  console.log(`>>> LOGIN ATTEMPT: ${email}`);
+
+  if (!email || !password) {
+    console.error("Login attempt with missing email or password");
+    return res.status(400).json({ error: "Email e password richiesti" });
   }
-  console.log(`Login successful for: ${user.name} (${user.role})`);
-  const token = jwt.sign({ id: user.id, role: user.role, name: user.name }, JWT_SECRET);
-  res.json({ token, user: { id: user.id, name: user.name, role: user.role } });
+
+  try {
+    const user: any = db.prepare("SELECT * FROM users WHERE email = ?").get(email);
+    if (!user) {
+      console.warn(`User not found: ${email}`);
+      return res.status(401).json({ error: "Credenziali non valide" });
+    }
+
+    if (!bcrypt.compareSync(password, user.password_hash)) {
+      console.warn(`Password mismatch for: ${email}`);
+      return res.status(401).json({ error: "Credenziali non valide" });
+    }
+
+    console.log(`Login successful for: ${user.name} (${user.role})`);
+    const token = jwt.sign({ id: user.id, role: user.role, name: user.name }, JWT_SECRET);
+    res.json({ token, user: { id: user.id, name: user.name, role: user.role } });
+  } catch (err) {
+    console.error("Login error in DB:", err);
+    res.status(500).json({ error: "Errore interno del server" });
+  }
 });
+
 
 // Ensure columns exist (Migration)
 try {
@@ -345,11 +373,17 @@ app.get("/api/download-project", (req, res) => {
 });
 
 // Serve static files
-app.use(express.static(__dirname));
+app.use(express.static(path.resolve(__dirname)));
 
 app.get("*", (req, res) => {
-  res.sendFile(path.join(__dirname, "index.html"));
+  if (req.url.startsWith('/api')) {
+    console.warn(`[404] API route not found: ${req.url}`);
+    return res.status(404).json({ error: "API non trovata" });
+  }
+  console.log(`Serving index.html for: ${req.url}`);
+  res.sendFile(path.join(path.resolve(__dirname), "index.html"));
 });
+
 
 app.listen(3000, "0.0.0.0", () => {
   console.log("Server GeoClock attivo su http://localhost:3000");
